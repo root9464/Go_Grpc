@@ -3,29 +3,48 @@ package main
 import (
 	"context"
 	"log"
-	"net"
 	pb "root/proto"
+	"time"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-type server struct {
-	pb.UnimplementedGetHelloServer
-}
-
-func (s *server) HelloWorld(ctx context.Context, in *pb.HelloWorldResponse) (*pb.HelloWorldResponse, error) {
-	log.Printf("Received: %v", in.GetMessage())
-	return &pb.HelloWorldResponse{Message: in.Message}, nil
+type HelloWorldRequest struct {
+	Message string `json:"message"`
 }
 
 func main() {
-	lis, err := net.Listen("tcp", ":3000")
-	if err != nil {
-		panic(err)
-	}
-	s := grpc.NewServer()
-	pb.RegisterGetHelloServer(s, &server{})
-	if err := s.Serve(lis); err != nil {
-		panic(err)
-	}
+	app := fiber.New()
+	app.Use(logger.New())
+
+	app.Post("/", func(c *fiber.Ctx) error {
+		var req HelloWorldRequest
+		if err := c.BodyParser(&req); err != nil {
+			log.Fatalf("не удалось распарсить запрос: %v", err)
+		}
+
+		conn, err := grpc.Dial("localhost:3001", grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+		if err != nil {
+			log.Fatalf("не удалось подключиться: %v", err)
+		}
+		defer conn.Close()
+		client := pb.NewGetHelloClient(conn)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		r, err := client.HelloWorld(ctx, &pb.HelloWorldResponse{
+			Message: req.Message,
+		})
+		if err != nil {
+			log.Fatalf("не удалось обработать запрос: %v", err)
+		}
+
+		return c.SendString(r.GetMessage())
+	})
+
+	log.Fatal(app.Listen(":3000"))
 }
